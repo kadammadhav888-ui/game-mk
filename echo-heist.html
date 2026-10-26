@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Echo Heist</title>
+<style>
+:root{--bg:#0f1d2b;--panel:#16293c;--line:#2b4660;--text:#e9f1f7;--dim:#8fa8bd;--me:#ffe9a8;--echo:#5ad1e6;--guard:#ff6b57;--ok:#7be3a4}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{min-height:100vh;display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px;-webkit-user-select:none;user-select:none;touch-action:manipulation}
+h1{margin:0;font-family:Georgia,"Times New Roman",serif;font-style:italic;font-weight:700;font-size:28px;letter-spacing:.02em}
+h1 em{color:var(--echo)}
+#hud{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;font-size:14px;color:var(--dim)}
+#hud b{color:var(--text);font-weight:600}
+#wrap{position:relative}
+canvas{display:block;border:1px solid var(--line);border-radius:6px;background:#0c1824}
+#hint{max-width:640px;text-align:center;color:var(--dim);font-size:14px;line-height:1.45;margin:0}
+#msg{min-height:22px;text-align:center;font-size:15px;max-width:640px}
+#msg.good{color:var(--ok)}#msg.bad{color:var(--guard)}
+#ov{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:20px;text-align:center;background:rgba(10,20,31,.88);border-radius:6px}
+#ov.show{display:flex}
+#ov h2{margin:0;font-family:Georgia,serif;font-style:italic;font-size:30px}
+#ov p{margin:0;max-width:440px;color:var(--dim);line-height:1.5;font-size:14px}
+#ov kbd,.keys kbd{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-size:12px;color:var(--text)}
+button{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:9px 14px;cursor:pointer}
+button:hover{border-color:var(--echo)}
+button:focus-visible{outline:2px solid var(--echo);outline-offset:2px}
+button.main{background:var(--echo);color:#06222b;border-color:var(--echo);font-weight:700}
+#ctl{display:flex;gap:18px;align-items:center;justify-content:center;flex-wrap:wrap}
+#dpad{display:grid;grid-template-columns:repeat(3,52px);grid-template-rows:repeat(3,46px);gap:4px}
+#dpad button{padding:0;font-size:18px}
+#acts{display:flex;flex-direction:column;gap:6px}
+.keys{font-size:12px;color:var(--dim);text-align:center;max-width:640px}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<h1>Echo <em>Heist</em></h1>
+<div id="hud"><span>Level <b id="hLv">1</b></span><span>Tick <b id="hTick">0</b></span><span>Echoes <b id="hEc">0/0</b></span><span id="hKey">Key: <b>not yet</b></span></div>
+<div id="wrap"><canvas id="cv"></canvas><div id="ov"></div></div>
+<div id="msg"></div>
+<p id="hint"></p>
+<div id="ctl">
+  <div id="dpad">
+    <span></span><button data-d="0,-1" aria-label="Up">▲</button><span></span>
+    <button data-d="-1,0" aria-label="Left">◀</button><button data-d="0,0" aria-label="Wait">•</button><button data-d="1,0" aria-label="Right">▶</button>
+    <span></span><button data-d="0,1" aria-label="Down">▼</button><span></span>
+  </div>
+  <div id="acts">
+    <button class="main" id="bLock">Lock echo</button>
+    <button id="bReset">Retry run</button>
+    <button id="bClear">Clear echoes</button>
+  </div>
+</div>
+<div class="keys"><kbd>Arrows</kbd> / <kbd>WASD</kbd> move · <kbd>Space</kbd> wait · <kbd>Enter</kbd> lock echo · <kbd>R</kbd> retry · <kbd>C</kbd> clear echoes</div>
+
+<script>
+// ---------- helpers ----------
+const line=(a,b,c,d)=>{const p=[],n=Math.max(Math.abs(c-a),Math.abs(d-b));for(let i=0;i<=n;i++)p.push([a+Math.sign(c-a)*i,b+Math.sign(d-b)*i]);return p};
+const patrol=(a,b,c,d)=>{const f=line(a,b,c,d);return f.concat(f.slice(1,-1).reverse())};
+const $=id=>document.getElementById(id);
+
+// ---------- levels ----------
+// Legend: # wall, S start, K key, X exit, a/b = pads, A/B = doors (open while any actor stands on matching pad)
+// guards: [x1,y1,x2,y2] = patrol line (walks there and back)
+const LEVELS=[
+{name:"First Echo",max:2,
+ hint:"Walk to the orange pad and stand there. Press Enter to lock your run as an echo. Next run, your echo holds the pad and the door stays open for you.",
+ map:["###########","#S...#....#","#....#....#","#.a..A..K.#","#....#....#","#....#..X.#","###########"],guards:[]},
+{name:"Two Locks",max:3,
+ hint:"Two doors, two pads. Your first echo opens door one. Use it to reach the pink pad and record a second echo.",
+ map:["#############","#S..#...#...#","#.a.#.b.#...#","#...A...B.K.#","#...#...#...#","#...#...#.X.#","#############"],guards:[]},
+{name:"Night Watch",max:2,
+ hint:"A guard patrols the vault. He only sees three tiles ahead in the direction he walks. Wait for the right tick, then cross his lane.",
+ map:["###########","#S...#...K#","#....#....#","#.a..A....#","#....#....#","#....#...X#","###########"],guards:[[7,1,7,5]]}
+];
+
+// ---------- state ----------
+const cv=$('cv'),ctx=cv.getContext('2d'),ov=$('ov');
+const COL={a:'#ff9f43',b:'#ff6fae'};
+let dpr=Math.min(window.devicePixelRatio||1,2),cs=40;
+let li=0,lv,grid,start,keyP,exitP,guards,echoes,rec,tick,hasKey,busy=true,tickTime=0,flash=0;
+
+function setMsg(t,c){const m=$('msg');m.textContent=t||'';m.className=c||''}
+function hud(){$('hLv').textContent=(li+1)+'/'+LEVELS.length;$('hTick').textContent=tick;$('hEc').textContent=echoes.length+'/'+lv.max;$('hKey').innerHTML='Key: <b>'+(hasKey?'got it':'not yet')+'</b>'}
+function showOv(h){ov.innerHTML=h;ov.classList.add('show');busy=true}
+function hideOv(){ov.classList.remove('show');busy=false}
+
+function load(n){
+  li=n;lv=LEVELS[n];grid=[];
+  lv.map.forEach((row,y)=>grid.push([...row].map((c,x)=>{
+    if(c==='S'){start=[x,y];return'.'}
+    if(c==='K'){keyP=[x,y];return'.'}
+    if(c==='X'){exitP=[x,y];return'.'}
+    return c})));
+  guards=lv.guards.map(g=>({path:patrol(...g)}));
+  echoes=[];fit();resetRun();$('hint').textContent=lv.hint;setMsg('');hideOv();
+}
+function resetRun(){tick=0;rec=[start.slice()];hasKey=false;tickTime=performance.now();hud()}
+function fit(){
+  const cols=grid[0].length,rows=grid.length;
+  const mw=Math.min(innerWidth-24,760),mh=Math.max(240,innerHeight-400);
+  cs=Math.max(22,Math.floor(Math.min(mw/cols,mh/rows,64)));
+  cv.width=cols*cs*dpr;cv.height=rows*cs*dpr;cv.style.width=cols*cs+'px';cv.style.height=rows*cs+'px';
+}
+addEventListener('resize',()=>{if(grid)fit()});
+
+// ---------- simulation ----------
+const echoAt=(e,t)=>e[Math.min(Math.max(t,0),e.length-1)];
+const gpos=(g,t)=>g.path[((t%g.path.length)+g.path.length)%g.path.length];
+function gdir(g,t){const a=gpos(g,t),b=gpos(g,t-1);return[Math.sign(a[0]-b[0]),Math.sign(a[1]-b[1])]}
+function actorsAt(t){return[rec[t],...echoes.map(e=>echoAt(e,t))]}
+function doorsOpen(t){const o={A:false,B:false};for(const [x,y] of actorsAt(t)){const c=grid[y][x];if(c==='a'||c==='b')o[c.toUpperCase()]=true}return o}
+function blocked(x,y,open){const c=grid[y]&&grid[y][x];if(c===undefined||c==='#')return true;if(c==='A'||c==='B')return !open[c];return false}
+function vision(g,t,open){
+  const [x,y]=gpos(g,t),[dx,dy]=gdir(g,t),out=[];
+  if(!dx&&!dy)return out;
+  for(let i=1;i<=3;i++){const nx=x+dx*i,ny=y+dy*i;if(blocked(nx,ny,open))break;out.push([nx,ny])}
+  return out;
+}
+function detect(){
+  const open=doorsOpen(tick),acts=actorsAt(tick);
+  const [px,py]=acts[0],pc=grid[py][px];
+  if((pc==='A'||pc==='B')&&!open[pc])return{i:0,why:'Crushed by a closing door. Something has to keep the pad pressed.'};
+  for(const g of guards){
+    const seen=[gpos(g,tick),...vision(g,tick,open)];
+    for(let i=0;i<acts.length;i++)if(seen.some(s=>s[0]===acts[i][0]&&s[1]===acts[i][1]))return{i,why:'A guard spotted you. Time it better and try again.'};
+  }
+  return null;
+}
+function step(dx,dy){
+  if(busy)return;
+  const open=doorsOpen(tick),[px,py]=rec[tick],nx=px+dx,ny=py+dy;
+  if((dx||dy)&&blocked(nx,ny,open)){setMsg(grid[ny]&&/[AB]/.test(grid[ny][nx])?'The door is locked. Something must press its pad.':'');return}
+  tick++;rec.push([nx,ny]);tickTime=performance.now();setMsg('');
+  if(nx===keyP[0]&&ny===keyP[1]&&!hasKey){hasKey=true;setMsg('Key acquired. Head for the exit.','good')}
+  const c=detect();
+  if(c){caught(c);hud();return}
+  if(nx===exitP[0]&&ny===exitP[1]){
+    if(hasKey){win();return}
+    setMsg('The exit is locked. Find the key first.','bad');
+  }
+  hud();
+}
+function caught(c){
+  busy=true;flash=1;
+  if(c.i>0){echoes.splice(c.i-1,1);setMsg('Echo '+c.i+' was spotted and wiped. Record it again.','bad')}
+  else setMsg(c.why,'bad');
+  setTimeout(()=>{resetRun();busy=false},750);
+}
+function lock(){
+  if(busy)return;
+  if(rec.length<2){setMsg('Make some moves first, then lock your echo.');return}
+  if(echoes.length>=lv.max){setMsg('Echo limit reached. Clear echoes to start over.','bad');return}
+  echoes.push(rec.slice());resetRun();
+  setMsg('Echo '+echoes.length+' locked. It replays your last run. Play alongside it.','good');
+}
+function retry(){if(!busy||ov.classList.contains('show')===false){resetRun();busy=false;setMsg('')}}
+function clearAll(){if(ov.classList.contains('show'))return;echoes=[];resetRun();busy=false;setMsg('All echoes cleared.')}
+function win(){
+  busy=true;
+  const last=li===LEVELS.length-1;
+  showOv(last
+    ?'<h2>Every vault cracked</h2><p>Finished in '+tick+' ticks on the last level with '+echoes.length+' echo'+(echoes.length===1?'':'es')+'. Add more levels in the LEVELS list and keep going.</p><button class="main" onclick="load(0)">Play again</button>'
+    :'<h2>Vault cracked</h2><p>'+lv.name+' done in '+tick+' ticks with '+echoes.length+' echo'+(echoes.length===1?'':'es')+'.</p><button class="main" onclick="load('+(li+1)+')">Next level</button>');
+}
+
+// ---------- input ----------
+addEventListener('keydown',e=>{
+  const k=e.key.toLowerCase(),m={arrowup:[0,-1],w:[0,-1],arrowdown:[0,1],s:[0,1],arrowleft:[-1,0],a:[-1,0],arrowright:[1,0],d:[1,0],' ':[0,0]};
+  if(m[k]){e.preventDefault();step(...m[k])}
+  else if(k==='enter'){e.preventDefault();lock()}
+  else if(k==='r')retry();
+  else if(k==='c')clearAll();
+});
+document.querySelectorAll('#dpad button').forEach(b=>b.addEventListener('click',()=>{const[d,e]=b.dataset.d.split(',').map(Number);step(d,e)}));
+$('bLock').onclick=lock;$('bReset').onclick=retry;$('bClear').onclick=clearAll;
+
+// ---------- drawing ----------
+const lerp=(a,b,p)=>a+(b-a)*p;
+function mix(A,B,p){return[lerp(A[0],B[0],p),lerp(A[1],B[1],p)]}
+function circle(x,y,r,fill,alpha){ctx.globalAlpha=alpha??1;ctx.fillStyle=fill;ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fill();ctx.globalAlpha=1}
+function draw(now){
+  requestAnimationFrame(draw);
+  if(!grid)return;
+  const p=Math.min(1,(now-tickTime)/110),pt=Math.max(tick-1,0),open=doorsOpen(tick);
+  const W=grid[0].length,H=grid.length,c=cs;
+  ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W*c,H*c);
+  const ctr=q=>[(q[0]+.5)*c,(q[1]+.5)*c];
+  // floor & walls
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const t=grid[y][x];
+    if(t==='#'){ctx.fillStyle='#244058';ctx.fillRect(x*c,y*c,c,c);ctx.strokeStyle='#37597a';ctx.strokeRect(x*c+.5,y*c+.5,c-1,c-1)}
+    else{ctx.fillStyle='#0e2030';ctx.fillRect(x*c,y*c,c,c);ctx.strokeStyle='rgba(90,209,230,.08)';ctx.strokeRect(x*c+.5,y*c+.5,c-1,c-1)}
+  }
+  // pads and doors
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const t=grid[y][x];
+    if(t==='a'||t==='b'){const on=doorsOpen(tick)[t.toUpperCase()];circle((x+.5)*c,(y+.5)*c,c*.3,COL[t],on?1:.45);ctx.strokeStyle=COL[t];ctx.lineWidth=2;ctx.beginPath();ctx.arc((x+.5)*c,(y+.5)*c,c*.38,0,7);ctx.stroke()}
+    if(t==='A'||t==='B'){const col=COL[t.toLowerCase()];ctx.lineWidth=2;ctx.strokeStyle=col;
+      if(open[t]){ctx.setLineDash([4,4]);ctx.strokeRect(x*c+3,y*c+3,c-6,c-6);ctx.setLineDash([])}
+      else{ctx.fillStyle=col;ctx.globalAlpha=.85;ctx.fillRect(x*c+2,y*c+2,c-4,c-4);ctx.globalAlpha=1}}
+  }
+  // exit & key
+  const [ex,ey]=ctr(exitP);ctx.strokeStyle=hasKey?'#7be3a4':'#4d6b5f';ctx.lineWidth=3;ctx.strokeRect(ex-c*.3,ey-c*.3,c*.6,c*.6);
+  ctx.fillStyle=hasKey?'#7be3a4':'#4d6b5f';ctx.font='bold '+Math.floor(c*.4)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('EXIT'.slice(0,1),ex,ey+1);
+  if(!hasKey){const [kx,ky]=ctr(keyP);ctx.fillStyle='#ffd24a';ctx.beginPath();ctx.moveTo(kx,ky-c*.28);ctx.lineTo(kx+c*.22,ky);ctx.lineTo(kx,ky+c*.28);ctx.lineTo(kx-c*.22,ky);ctx.fill()}
+  // guard vision
+  for(const g of guards){ctx.fillStyle='rgba(255,107,87,.26)';for(const [vx,vy] of vision(g,tick,open))ctx.fillRect(vx*c,vy*c,c,c)}
+  // echo trails + echoes
+  echoes.forEach(e=>{
+    ctx.strokeStyle='rgba(90,209,230,.28)';ctx.lineWidth=2;ctx.beginPath();
+    for(let t=0;t<=Math.min(tick,e.length-1);t++){const q=ctr(e[t]);t?ctx.lineTo(...q):ctx.moveTo(...q)}ctx.stroke();
+  });
+  ctx.strokeStyle='rgba(255,233,168,.25)';ctx.lineWidth=2;ctx.beginPath();rec.forEach((q,i)=>{const z=ctr(q);i?ctx.lineTo(...z):ctx.moveTo(...z)});ctx.stroke();
+  echoes.forEach(e=>{const q=ctr(mix(echoAt(e,pt),echoAt(e,tick),p));circle(...q,c*.3,'#5ad1e6',.8);circle(...q,c*.12,'#0e2030',1)});
+  // guards
+  for(const g of guards){const q=ctr(mix(gpos(g,pt),gpos(g,tick),p));circle(...q,c*.34,'#ff6b57');const[dx,dy]=gdir(g,tick);circle(q[0]+dx*c*.15,q[1]+dy*c*.15,c*.1,'#0e2030')}
+  // player
+  const q=ctr(mix(rec[pt],rec[tick],p));circle(...q,c*.32,'#ffe9a8');circle(...q,c*.12,'#0e2030');
+  // flash on capture
+  if(flash>0){ctx.fillStyle='rgba(255,107,87,'+(flash*.35)+')';ctx.fillRect(0,0,W*c,H*c);flash=Math.max(0,flash-.03)}
+}
+requestAnimationFrame(draw);
+
+// ---------- start ----------
+load(0);
+showOv('<h2>Echo Heist</h2><p>Record a run, lock it as an <b>echo</b>, then play alongside your own ghost. Echoes press pads that you cannot hold and walk where guards watch. Reach the key, then the exit. If a guard sees you or an echo, the run resets.</p><p><kbd>Arrows</kbd> / <kbd>WASD</kbd> move · <kbd>Space</kbd> wait · <kbd>Enter</kbd> lock echo · <kbd>R</kbd> retry</p><button class="main" onclick="hideOv()">Start heist</button>');
+</script>
+</body>
+</html>
